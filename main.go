@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"github.com/syndtr/goleveldb/leveldb/opt"
+	"time"
 )
 
 
@@ -209,15 +211,89 @@ type command struct {
 }
 
 
-func main() {
-	db, err := leveldb.OpenFile("./db", nil)
-	if err != nil {
-		fmt.Println("couldnt open db.")
+
+type numberComparer struct{}
+
+func (numberComparer) num(x []byte) (n int) {
+	fmt.Sscan(string(x[1:len(x)-1]), &n)
+	return
+}
+
+func (numberComparer) Name() string {
+	return "test.NumberComparer"
+}
+
+func (p numberComparer) Compare(a, b []byte) int {
+	s1 := string(a)
+	s2 := string(b)
+
+	r1 := strings.Split(s1, "_")
+	g1 := r1[0]
+	v1 := r1[1]
+
+	r2 := strings.Split(s2, "_")
+	g2 := r2[0]
+	v2 := r2[1]
+
+	if g1 != g2 {
+		return strings.Compare(string(a), string(b))
 	}
-	err = db.Put([]byte("key"), []byte("value"), nil)
+
+	c1, _ := strconv.ParseInt(v1, 10, 64)
+	c2, _ := strconv.ParseInt(v2, 10, 64)
+	return int(c1 - c2)
+}
+
+
+func (numberComparer) Separator(dst, a, b []byte) []byte {
+	return nil
+}
+func (numberComparer) Successor(dst, b []byte) []byte    {
+	return nil
+}
+
+
+func main() {
+	db, err := leveldb.OpenFile("./db", &opt.Options{
+		DisableLargeBatchTransaction: true,
+		Comparer:                     numberComparer{},
+	})
+	if err != nil {
+		fmt.Println("couldnt open db.", err)
+		return
+	}
+
+	err = db.Put([]byte("foo_3"), []byte("value"), nil)
+	err = db.Put([]byte("foo_2"), []byte("value"), nil)
+	err = db.Put([]byte("foo_1"), []byte("value"), nil)
+	err = db.Put([]byte("bar_1"), []byte("value"), nil)
+
+
+	//err = db.Put([]byte("foo_2"), []byte("value"), nil)
+	//err = db.Put([]byte("foo_3"), []byte("value"), nil)
+	//err = db.Put([]byte("foo_1"), []byte("value"), nil)
+	//err = db.Put([]byte("bar_1"), []byte("value"), nil)
+
 	if err != nil {
 		fmt.Println("err", err)
 	}
+
+	t1 := time.Now()
+
+	for i := 0; i < 100000; i++ {
+		err = db.Put([]byte(fmt.Sprintf("foo_%d", i)), []byte("value"), nil)
+	}
+
+	fmt.Println("elapsed", time.Now().Sub(t1))
+
+
+	//iter := db.NewIterator(nil, nil)
+	//for iter.Next() {
+	//    	key := iter.Key()
+	//    	value := iter.Value()
+	//	fmt.Println("------------->", string(key), string(value))
+	//}
+
 	defer db.Close()
 
 
