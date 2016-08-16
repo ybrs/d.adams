@@ -6,7 +6,8 @@ import (
 	"io"
 	"log"
 	"net"
-	"os"
+	//"os"
+	"github.com/syndtr/goleveldb/leveldb"
 	"strconv"
 	"strings"
 	"sync"
@@ -69,8 +70,10 @@ func (client *client) serve() {
 			if len(cmd.Args) < 1 {
 				client.sendError(fmt.Errorf("POP expects 1 argument"))
 			}
-			client.send("hello", "bar")
-
+			//client.send("hello", "bar")
+			for _, arg := range(cmd.Args){
+				fmt.Println("args", arg)
+			}
 		case "POP":
 			if len(cmd.Args) < 1 {
 				client.sendError(fmt.Errorf("POP expects 1 argument"))
@@ -207,31 +210,43 @@ type command struct {
 
 
 func main() {
-	log.Printf("Server started\n")
-	addr := ":8080"
-	listener, err := net.Listen("tcp", ":8080")
+	db, err := leveldb.OpenFile("./db", nil)
 	if err != nil {
-		log.Printf("Error: listen(): %s", err)
-		os.Exit(1)
+		fmt.Println("couldnt open db.")
 	}
-
-	log.Printf("Accepting connections at: %s", addr)
-	store := &store{
-		data: make(map[string]string),
-		lock: &sync.RWMutex{},
+	err = db.Put([]byte("key"), []byte("value"), nil)
+	if err != nil {
+		fmt.Println("err", err)
 	}
+	defer db.Close()
 
-	var id int64
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			log.Printf("Error: Accept(): %s", err)
-			continue
-		}
 
-		id++
-		client := &client{id: id, conn: conn, store: store}
-		go client.serve()
-	}
+
+	//log.Printf("Server started\n")
+	//addr := ":8080"
+	//listener, err := net.Listen("tcp", ":8080")
+	//if err != nil {
+	//	log.Printf("Error: listen(): %s", err)
+	//	os.Exit(1)
+	//}
+	//
+	//log.Printf("Accepting connections at: %s", addr)
+	//store := &store{
+	//	data: make(map[string]string),
+	//	lock: &sync.RWMutex{},
+	//}
+	//
+	//var id int64
+	//for {
+	//	conn, err := listener.Accept()
+	//	if err != nil {
+	//		log.Printf("Error: Accept(): %s", err)
+	//		continue
+	//	}
+	//
+	//	id++
+	//	client := &client{id: id, conn: conn, store: store}
+	//	go client.serve()
+	//}
 }
 
