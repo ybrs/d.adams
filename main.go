@@ -14,6 +14,7 @@ import (
 	"github.com/syndtr/goleveldb/leveldb/opt"
 	//"time"
 	"os"
+	"github.com/syndtr/goleveldb/leveldb/util"
 )
 
 
@@ -62,14 +63,17 @@ func (client *client) nextNum() (int64){
 	return client.counter.cnt
 }
 
-
 func (client *client) serve() {
+
+	fmt.Println("x 1 0 0")
+
 	// defer client.conn.Close()
 
-	// client.log("Accepted connection: %s", client.conn.LocalAddr())
+	 client.log("Accepted connection: %s", client.conn.LocalAddr())
 	client.reader = bufio.NewReader(client.conn)
 
 	for {
+		fmt.Println("x 1 0")
 		cmd, err := client.readCommand()
 		if err != nil {
 			if err == io.EOF {
@@ -82,8 +86,11 @@ func (client *client) serve() {
 			return
 		}
 
+		fmt.Println("xxxx --- 0")
+
 		switch strings.ToUpper(cmd.Name) {
 		case "PUSH":
+			fmt.Println("xxxx --- 1")
 			// push channel args....
 			if len(cmd.Args) < 2 {
 				client.sendError(fmt.Errorf("PUSH expects 1 argument"))
@@ -104,6 +111,27 @@ func (client *client) serve() {
 			for _, arg := range(cmd.Args){
 				fmt.Println("args", arg)
 			}
+
+		case "SUBSCRIBE":
+			// this just sends X num of items in the channel
+			iter := client.db.NewIterator(&util.Range{
+					Start: []byte("foobar_1"),
+			}, nil)
+			defer iter.Release()
+			fmt.Println("xxxx --- ")
+			cnt := 0
+			for iter.Next() {
+				key := iter.Key()
+				value := iter.Value()
+				fmt.Println("sending - ", string(key), string(value))
+				client.send(string(key), string(value))
+				cnt += 1
+				if cnt > 10 {
+					break
+				}
+			}
+
+
 		case "POP":
 			if len(cmd.Args) < 1 {
 				client.sendError(fmt.Errorf("POP expects 1 argument"))
