@@ -12,7 +12,8 @@ import (
 	"strings"
 	"sync"
 	"github.com/syndtr/goleveldb/leveldb/opt"
-	"time"
+	//"time"
+	"os"
 )
 
 
@@ -35,12 +36,32 @@ func (store *store) Set(key string, val string) {
 	store.data[key] = val
 }
 
+
+type Counter struct {
+	cnt int64
+	sync.RWMutex
+}
+
+
 type client struct {
 	id     int64
 	conn   net.Conn
 	reader *bufio.Reader
 	store  *store
+	counter *Counter
+	db *leveldb.DB
 }
+
+
+
+func (client *client) nextNum() (int64){
+	client.counter.Lock()
+	defer client.counter.Unlock()
+	client.counter.cnt += 1
+	client.db.Put([]byte("internalcounter_1"), []byte(strconv.FormatInt(client.counter.cnt, 10)), nil)
+	return client.counter.cnt
+}
+
 
 func (client *client) serve() {
 	// defer client.conn.Close()
@@ -66,6 +87,13 @@ func (client *client) serve() {
 			// push channel args....
 			if len(cmd.Args) < 2 {
 				client.sendError(fmt.Errorf("PUSH expects 1 argument"))
+			} else {
+				// strconv.FormatInt(time.Now().UnixNano(), 10)
+				c := client.nextNum()
+				n := []string{cmd.Args[0], strconv.FormatInt(c, 10)}
+				k := strings.Join(n, "_")
+				client.db.Put([]byte(k), []byte(cmd.Args[1]), nil)
+				client.send(k)
 			}
 
 		case "BLPOP":
@@ -97,14 +125,14 @@ func (client *client) serve() {
 		// 	client.store.Set(cmd.Args[0], cmd.Args[1])
 		// 	fmt.Fprintf(client.conn, "+OK\r\n")
 		default:
-			client.sendError(fmt.Errorf("unkonwn command: %s", cmd.Name))
+			client.sendError(fmt.Errorf("unknown command: %s", cmd.Name))
 		}
 	}
 }
 
 func (client *client) log(msg string, args ...interface{}) {
 	prefix := fmt.Sprintf("Client #%d: ", client.id)
-	log.Printf(prefix+msg, args...)
+	log.Printf(prefix + msg, args...)
 }
 
 func (client *client) logError(msg string, args ...interface{}) {
@@ -113,11 +141,9 @@ func (client *client) logError(msg string, args ...interface{}) {
 
 func (client *client) send(vals ...string) {
 	// fmt.Fprintf(client.conn, "$%d\r\n%s\r\n", len(val), val)
-	fmt.Println("hello....")
 	fmt.Fprintf(client.conn, "*%d\r\n", len(vals))
 	for _, val := range(vals){
 		fmt.Fprintf(client.conn, "$%d\r\n%s\r\n", len(val), val)
-		fmt.Printf("$%d\r\n%s\r\n", len(val), val)
 	}
 }
 
@@ -141,7 +167,6 @@ func (e protocolError) Error() string {
 func (client *client) readCommand() (*command, error) {
 	for {
 		line, err := client.readLine()
-		fmt.Println("reading line", line)
 
 		if err != nil {
 			return nil, err
@@ -263,10 +288,10 @@ func main() {
 		return
 	}
 
-	err = db.Put([]byte("foo_3"), []byte("value"), nil)
-	err = db.Put([]byte("foo_2"), []byte("value"), nil)
-	err = db.Put([]byte("foo_1"), []byte("value"), nil)
-	err = db.Put([]byte("bar_1"), []byte("value"), nil)
+	//err = db.Put([]byte("foo_3"), []byte("value"), nil)
+	//err = db.Put([]byte("foo_2"), []byte("value"), nil)
+	//err = db.Put([]byte("foo_1"), []byte("value"), nil)
+	//err = db.Put([]byte("bar_1"), []byte("value"), nil)
 
 
 	//err = db.Put([]byte("foo_2"), []byte("value"), nil)
@@ -274,17 +299,17 @@ func main() {
 	//err = db.Put([]byte("foo_1"), []byte("value"), nil)
 	//err = db.Put([]byte("bar_1"), []byte("value"), nil)
 
-	if err != nil {
-		fmt.Println("err", err)
-	}
-
-	t1 := time.Now()
-
-	for i := 0; i < 100000; i++ {
-		err = db.Put([]byte(fmt.Sprintf("foo_%d", i)), []byte("value"), nil)
-	}
-
-	fmt.Println("elapsed", time.Now().Sub(t1))
+	//if err != nil {
+	//	fmt.Println("err", err)
+	//}
+	//
+	//t1 := time.Now()
+	//
+	//for i := 0; i < 100000; i++ {
+	//	err = db.Put([]byte(fmt.Sprintf("foo_%d", i)), []byte("value"), nil)
+	//}
+	//
+	//fmt.Println("elapsed", time.Now().Sub(t1))
 
 
 	//iter := db.NewIterator(nil, nil)
@@ -294,35 +319,48 @@ func main() {
 	//	fmt.Println("------------->", string(key), string(value))
 	//}
 
+	cnt := &Counter{}
+
+	fmt.Println(cnt)
+
+	cnt.Lock()
+	v, err := db.Get([]byte("internalcounter_1"), nil)
+	if err != nil {
+		v = []byte(strconv.FormatInt(0, 10))
+		db.Put([]byte("internalcounter_1"), []byte(strconv.FormatInt(0, 10)), nil)
+	}
+
+	cnt.cnt, err = strconv.ParseInt(string(v), 10, 64)
+	cnt.Unlock()
 	defer db.Close()
 
 
 
-	//log.Printf("Server started\n")
-	//addr := ":8080"
-	//listener, err := net.Listen("tcp", ":8080")
-	//if err != nil {
-	//	log.Printf("Error: listen(): %s", err)
-	//	os.Exit(1)
-	//}
-	//
-	//log.Printf("Accepting connections at: %s", addr)
-	//store := &store{
-	//	data: make(map[string]string),
-	//	lock: &sync.RWMutex{},
-	//}
-	//
-	//var id int64
-	//for {
-	//	conn, err := listener.Accept()
-	//	if err != nil {
-	//		log.Printf("Error: Accept(): %s", err)
-	//		continue
-	//	}
-	//
-	//	id++
-	//	client := &client{id: id, conn: conn, store: store}
-	//	go client.serve()
-	//}
+	log.Printf("Server started\n")
+	addr := ":8080"
+	listener, err := net.Listen("tcp", ":8080")
+	if err != nil {
+		log.Printf("Error: listen(): %s", err)
+		os.Exit(1)
+	}
+
+	log.Printf("Accepting connections at: %s", addr)
+	store := &store{
+		data: make(map[string]string),
+		lock: &sync.RWMutex{},
+	}
+
+	var id int64
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			log.Printf("Error: Accept(): %s", err)
+			continue
+		}
+
+		id++
+		client := &client{id: id, conn: conn, store: store, db: db, counter: cnt}
+		go client.serve()
+	}
 }
 
