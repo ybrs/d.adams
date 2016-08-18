@@ -15,6 +15,8 @@ import (
 	//"time"
 	"os"
 	"github.com/syndtr/goleveldb/leveldb/util"
+
+	"github.com/boltdb/bolt"
 )
 
 
@@ -50,17 +52,45 @@ type client struct {
 	reader *bufio.Reader
 	store  *store
 	counter *Counter
+	clientid string
 	db *leveldb.DB
+	bdb *bolt.DB
 }
 
 
 
 func (client *client) nextNum() (int64){
+	// this is a global counter
 	client.counter.Lock()
 	defer client.counter.Unlock()
 	client.counter.cnt += 1
 	client.db.Put([]byte("internalcounter_1"), []byte(strconv.FormatInt(client.counter.cnt, 10)), nil)
 	return client.counter.cnt
+}
+
+func (client *client) UpdateOffset(offset int64) {
+    // check if client id is in the bucket
+    err = client.bdb.Update(func(tx *bolt.Tx) error {
+	bucket, err := tx.CreateBucketIfNotExists([]byte("CLIENT_OFFSETS"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	val := bucket.Get([]byte(cmd.Args[0]))
+	if val == nil {
+		// first time
+	}
+	fmt.Println("setting client offset - ", cmd.Args[0], 0)
+	err = bucket.Put([]byte(cmd.Args[0]), []byte(string(offset)))
+	if err != nil {
+		log.Fatal(err)
+	}
+	return nil
+    })
+
+}
+
+func (client *client) GetOffset(){
+
 }
 
 func (client *client) serve() {
@@ -89,11 +119,11 @@ func (client *client) serve() {
 		fmt.Println("xxxx --- 0")
 
 		switch strings.ToUpper(cmd.Name) {
-		case "PUSH":
+		case "PUBLISH":
 			fmt.Println("xxxx --- 1")
 			// push channel args....
 			if len(cmd.Args) < 2 {
-				client.sendError(fmt.Errorf("PUSH expects 1 argument"))
+				client.sendError(fmt.Errorf("PUSH expects 2 arguments"))
 			} else {
 				// strconv.FormatInt(time.Now().UnixNano(), 10)
 				c := client.nextNum()
@@ -112,19 +142,29 @@ func (client *client) serve() {
 				fmt.Println("args", arg)
 			}
 
+		case "CLIENTID":
+			client.clientid = cmd.Args[0]
+
+		//case "ACK":
+
+
+
 		case "SUBSCRIBE":
 			// this just sends X num of items in the channel
+			// then subscribes to channel X starting from 0
+			// or where the client has left off
+			fmt.Println("-> args ->", cmd.Args)
+			startNum := int64(0)
 			iter := client.db.NewIterator(&util.Range{
-					Start: []byte("foobar_1"),
+					Start: []byte(strings.Join([]string{cmd.Args[0], strconv.FormatInt(startNum, 10)}, "_")),
 			}, nil)
 			defer iter.Release()
-			fmt.Println("xxxx --- ")
 			cnt := 0
 			for iter.Next() {
 				key := iter.Key()
 				value := iter.Value()
 				fmt.Println("sending - ", string(key), string(value))
-				client.send(string(key), string(value))
+				client.send("message", cmd.Args[0], string(key) + "||" + string(value))
 				cnt += 1
 				if cnt > 10 {
 					break
@@ -307,6 +347,13 @@ func (numberComparer) Successor(dst, b []byte) []byte    {
 
 
 func main() {
+
+	bdb, err := bolt.Open("./db/boltdb.bdb", 0644, nil)
+	if err != nil {
+        	log.Fatal(err)
+    	}
+	defer bdb.Close()
+
 	db, err := leveldb.OpenFile("./db", &opt.Options{
 		DisableLargeBatchTransaction: true,
 		Comparer:                     numberComparer{},
@@ -387,7 +434,7 @@ func main() {
 		}
 
 		id++
-		client := &client{id: id, conn: conn, store: store, db: db, counter: cnt}
+		client := &client{id: id, conn: conn, store: store, db: db, counter: cnt, bdb: bdb}
 		go client.serve()
 	}
 }
