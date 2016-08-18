@@ -55,6 +55,7 @@ type client struct {
 	clientid string
 	db *leveldb.DB
 	bdb *bolt.DB
+	offset uint64
 }
 
 
@@ -68,29 +69,70 @@ func (client *client) nextNum() (int64){
 	return client.counter.cnt
 }
 
-func (client *client) UpdateOffset(offset int64) {
+func (client *client) UpdateOffset(offset uint64) {
     // check if client id is in the bucket
-    err = client.bdb.Update(func(tx *bolt.Tx) error {
+    err := client.bdb.Update(func(tx *bolt.Tx) error {
 	bucket, err := tx.CreateBucketIfNotExists([]byte("CLIENT_OFFSETS"))
 	if err != nil {
 		log.Fatal(err)
 	}
-	val := bucket.Get([]byte(cmd.Args[0]))
+	val := bucket.Get([]byte(client.clientid))
 	if val == nil {
 		// first time
+		fmt.Println("setting client offset - first time", client.clientid, 0)
+
+		err = bucket.Put([]byte(client.clientid), []byte(string(0)))
+		if err != nil {
+			log.Fatal(err)
+		}
+		return nil
 	}
-	fmt.Println("setting client offset - ", cmd.Args[0], 0)
-	err = bucket.Put([]byte(cmd.Args[0]), []byte(string(offset)))
+
+	fmt.Println("setting client offset - ", client.clientid, offset)
+	err = bucket.Put([]byte(client.clientid), []byte(string(offset)))
 	if err != nil {
 		log.Fatal(err)
 	}
 	return nil
     })
 
+	if err != nil {
+		log.Fatal(err)
+	}
+
 }
 
 func (client *client) GetOffset(){
+    err := client.bdb.Update(func(tx *bolt.Tx) error {
+	bucket, err := tx.CreateBucketIfNotExists([]byte("CLIENT_OFFSETS"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	val := bucket.Get([]byte(client.clientid))
+	if val == nil {
+		// first time
+		fmt.Println("setting client offset - first time", client.clientid, 0)
 
+		err = bucket.Put([]byte(client.clientid), []byte("0"))
+		if err != nil {
+			log.Fatal(err)
+		}
+		return nil
+	}
+
+	    c, err := strconv.ParseUint(string(val), 10, 64)
+	    client.offset = c
+
+	    if err != nil {
+		    log.Fatal(err)
+	    }
+
+	return nil
+    })
+
+	if err != nil {
+		log.Fatal(err)
+	}
 }
 
 func (client *client) serve() {
@@ -144,19 +186,27 @@ func (client *client) serve() {
 
 		case "CLIENTID":
 			client.clientid = cmd.Args[0]
+			client.sendOk()
 
-		//case "ACK":
+		case "ACK":
 
-
+			c, err := strconv.ParseUint(cmd.Args[1], 10, 64)
+			if err != nil {
+				client.sendError(err)
+				break
+			}
+			client.UpdateOffset(c)
+			client.sendOk()
 
 		case "SUBSCRIBE":
 			// this just sends X num of items in the channel
 			// then subscribes to channel X starting from 0
 			// or where the client has left off
 			fmt.Println("-> args ->", cmd.Args)
-			startNum := int64(0)
+			client.GetOffset()
+			startNum := client.offset
 			iter := client.db.NewIterator(&util.Range{
-					Start: []byte(strings.Join([]string{cmd.Args[0], strconv.FormatInt(startNum, 10)}, "_")),
+					Start: []byte(strings.Join([]string{cmd.Args[0], strconv.FormatUint(startNum, 10)}, "_")),
 			}, nil)
 			defer iter.Release()
 			cnt := 0
@@ -205,6 +255,10 @@ func (client *client) log(msg string, args ...interface{}) {
 
 func (client *client) logError(msg string, args ...interface{}) {
 	client.log("Error: "+msg, args...)
+}
+
+func (client *client) sendOk(){
+	fmt.Fprintf(client.conn, "+OK\r\n")
 }
 
 func (client *client) send(vals ...string) {
@@ -348,11 +402,8 @@ func (numberComparer) Successor(dst, b []byte) []byte    {
 
 func main() {
 
-	bdb, err := bolt.Open("./db/boltdb.bdb", 0644, nil)
-	if err != nil {
-        	log.Fatal(err)
-    	}
-	defer bdb.Close()
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+
 
 	db, err := leveldb.OpenFile("./db", &opt.Options{
 		DisableLargeBatchTransaction: true,
@@ -362,6 +413,13 @@ func main() {
 		fmt.Println("couldnt open db.", err)
 		return
 	}
+
+	bdb, err := bolt.Open("./db/boltdb.bdb", 0644, nil)
+	if err != nil {
+        	log.Fatal(err)
+    	}
+	defer bdb.Close()
+
 
 	//err = db.Put([]byte("foo_3"), []byte("value"), nil)
 	//err = db.Put([]byte("foo_2"), []byte("value"), nil)
