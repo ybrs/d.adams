@@ -15,8 +15,6 @@ import (
 	//"time"
 	"os"
 	"github.com/syndtr/goleveldb/leveldb/util"
-
-	"github.com/boltdb/bolt"
 )
 
 
@@ -54,7 +52,7 @@ type client struct {
 	counter *Counter
 	clientid string
 	db *leveldb.DB
-	bdb *bolt.DB
+	bdb *leveldb.DB
 	offset uint64
 }
 
@@ -65,87 +63,37 @@ func (client *client) nextNum() (int64){
 	client.counter.Lock()
 	defer client.counter.Unlock()
 	client.counter.cnt += 1
-	client.db.Put([]byte("internalcounter_1"), []byte(strconv.FormatInt(client.counter.cnt, 10)), nil)
+	UpdateGlobalCounter(client.bdb, client.counter.cnt)
 	return client.counter.cnt
 }
 
+
+func UpdateGlobalCounter(db *leveldb.DB, offset int64) {
+     db.Put([]byte("COUNTER"), []byte(string(offset)), nil)
+}
+
+
 func (client *client) UpdateOffset(offset uint64) {
-    // check if client id is in the bucket
-    err := client.bdb.Update(func(tx *bolt.Tx) error {
-	bucket, err := tx.CreateBucketIfNotExists([]byte("CLIENT_OFFSETS"))
-	if err != nil {
-		log.Fatal(err)
-	}
-	val := bucket.Get([]byte(client.clientid))
-	if val == nil {
-		// first time
-		fmt.Println("setting client offset - first time", client.clientid, 0)
-
-		err = bucket.Put([]byte(client.clientid), []byte(string(0)))
-		if err != nil {
-			log.Fatal(err)
-		}
-		return nil
-	}
-
-	fmt.Println("setting client offset - ", client.clientid, offset)
-	err = bucket.Put([]byte(client.clientid), []byte(string(offset)))
-	if err != nil {
-		log.Fatal(err)
-	}
-	return nil
-    })
-
-	if err != nil {
-		log.Fatal(err)
-	}
-
+	client.bdb.Put([]byte("CLIENT_OFFSET_" + client.clientid), []byte(string(offset)), nil)
 }
 
 func (client *client) GetOffset(){
-    err := client.bdb.Update(func(tx *bolt.Tx) error {
-	bucket, err := tx.CreateBucketIfNotExists([]byte("CLIENT_OFFSETS"))
+	c, err := client.bdb.Get([]byte("CLIENT_OFFSET_" + client.clientid), nil)
 	if err != nil {
 		log.Fatal(err)
 	}
-	val := bucket.Get([]byte(client.clientid))
-	if val == nil {
-		// first time
-		fmt.Println("setting client offset - first time", client.clientid, 0)
 
-		err = bucket.Put([]byte(client.clientid), []byte("0"))
-		if err != nil {
-			log.Fatal(err)
-		}
-		return nil
-	}
-
-	    c, err := strconv.ParseUint(string(val), 10, 64)
-	    client.offset = c
-
-	    if err != nil {
-		    log.Fatal(err)
-	    }
-
-	return nil
-    })
-
+	client.offset, err = strconv.ParseUint(string(c), 10, 64)
 	if err != nil {
 		log.Fatal(err)
 	}
 }
 
 func (client *client) serve() {
-
-	fmt.Println("x 1 0 0")
-
-	// defer client.conn.Close()
-
-	 client.log("Accepted connection: %s", client.conn.LocalAddr())
+	client.log("Accepted connection: %s", client.conn.LocalAddr())
 	client.reader = bufio.NewReader(client.conn)
 
 	for {
-		fmt.Println("x 1 0")
 		cmd, err := client.readCommand()
 		if err != nil {
 			if err == io.EOF {
@@ -158,21 +106,19 @@ func (client *client) serve() {
 			return
 		}
 
-		fmt.Println("xxxx --- 0")
-
 		switch strings.ToUpper(cmd.Name) {
 		case "NOOP":
 			client.sendOk()
 		case "ECHO":
 			client.send(cmd.Args...)
 		case "PUBLISH":
-			fmt.Println("xxxx --- 1")
 			// push channel args....
 			if len(cmd.Args) < 2 {
-				client.sendError(fmt.Errorf("PUSH expects 2 arguments"))
+				client.sendError(fmt.Errorf("PUBLISH expects 2 arguments"))
 			} else {
 				// strconv.FormatInt(time.Now().UnixNano(), 10)
 				c := client.nextNum()
+				//c := int64(100)
 				n := []string{cmd.Args[0], strconv.FormatInt(c, 10)}
 				k := strings.Join(n, "_")
 				client.db.Put([]byte(k), []byte(cmd.Args[1]), nil)
@@ -225,7 +171,9 @@ func (client *client) serve() {
 				}
 			}
 
-
+		case "LPUSH":
+			// this is for testing only
+			client.sendOk()
 		case "POP":
 			if len(cmd.Args) < 1 {
 				client.sendError(fmt.Errorf("POP expects 1 argument"))
@@ -398,7 +346,7 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
 
-	db, err := leveldb.OpenFile("./db", &opt.Options{
+	db, err := leveldb.OpenFile("./db/queues", &opt.Options{
 		DisableLargeBatchTransaction: true,
 		Comparer:                     numberComparer{},
 	})
@@ -407,7 +355,8 @@ func main() {
 		return
 	}
 
-	bdb, err := bolt.Open("./db/boltdb.bdb", 0644, nil)
+	bdb, err := leveldb.OpenFile("./db/metadb", nil)
+
 	if err != nil {
         	log.Fatal(err)
     	}
@@ -450,15 +399,15 @@ func main() {
 	fmt.Println(cnt)
 
 	cnt.Lock()
-	v, err := db.Get([]byte("internalcounter_1"), nil)
+	v, err := bdb.Get([]byte("internalcounter_1"), nil)
 	if err != nil {
 		v = []byte(strconv.FormatInt(0, 10))
-		db.Put([]byte("internalcounter_1"), []byte(strconv.FormatInt(0, 10)), nil)
+		bdb.Put([]byte("internalcounter_1"), []byte(strconv.FormatInt(0, 10)), nil)
 	}
 
 	cnt.cnt, err = strconv.ParseInt(string(v), 10, 64)
 	cnt.Unlock()
-	defer db.Close()
+	defer bdb.Close()
 
 
 
