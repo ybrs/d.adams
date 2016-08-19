@@ -161,6 +161,10 @@ func (client *client) serve() {
 		fmt.Println("xxxx --- 0")
 
 		switch strings.ToUpper(cmd.Name) {
+		case "NOOP":
+			client.sendOk()
+		case "ECHO":
+			client.send(cmd.Args...)
 		case "PUBLISH":
 			fmt.Println("xxxx --- 1")
 			// push channel args....
@@ -295,14 +299,13 @@ func (client *client) readCommand() (*command, error) {
 		}
 
 		// Example: *5 (command consisting of 5 arguments)
-		if !strings.HasPrefix(line, "*") {
+		if line[0] != '*' {
 			return &command{Name: line}, nil
 		}
 
-		argcStr := line[1:]
-		argc, err := strconv.ParseUint(argcStr, 10, 64)
+		argc, err := strconv.ParseUint(line[1:], 10, 64)
 		if err != nil || argc <= 1 {
-			return nil, protocolError("invalid argument count: " + argcStr)
+			return nil, protocolError("invalid argument count: " + string(line[1:]))
 		}
 
 		args := make([]string, 0, argc)
@@ -313,17 +316,16 @@ func (client *client) readCommand() (*command, error) {
 			}
 
 			// Example: $3 (next line has 3 bytes + \r\n)
-			if !strings.HasPrefix(line, "$") {
+			if line[0] != '$' {
 				return nil, protocolError("unknown command: " + line)
 			}
 
-			argLenStr := line[1:]
-			argLen, err := strconv.ParseUint(argLenStr, 10, 64)
+			argLen, err := strconv.ParseUint(line[1:], 10, 64)
 			if err != nil {
-				return nil, protocolError("invalid argument length: " + argLenStr)
+				return nil, protocolError("invalid argument length: " + line[1:])
 			}
 
-			arg := make([]byte, argLen+2)
+			arg := make([]byte, argLen + 2)
 			if _, err := io.ReadFull(client.reader, arg); err != nil {
 				return nil, err
 			}
@@ -336,20 +338,11 @@ func (client *client) readCommand() (*command, error) {
 }
 
 func (client *client) readLine() (string, error) {
-	var line string
-	for {
-		partialLine, isPrefix, err := client.reader.ReadLine()
-		if err != nil {
-			return "", err
-		}
-
-		line += string(partialLine)
-		if isPrefix {
-			continue
-		}
-
-		return line, nil
+	line, err := client.reader.ReadBytes('\n')
+	if err != nil {
+		return "", err
 	}
+	return string(line[0:len(line)-2]), nil
 }
 
 type command struct {
