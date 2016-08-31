@@ -95,6 +95,7 @@ func (client *client) serve() {
 
 	for {
 		cmd, err := client.readCommand()
+		//fmt.Println(">>>", cmd)
 		if err != nil {
 			if err == io.EOF {
 				client.log("Disconnected")
@@ -108,9 +109,14 @@ func (client *client) serve() {
 
 		switch strings.ToUpper(cmd.Name) {
 		case "NOOP":
+			//fmt.Println("noop", cmd.Args)
 			client.sendOk()
 		case "ECHO":
 			client.send(cmd.Args...)
+		case "MULTI":
+			client.sendOk()
+		case "EXEC":
+			client.send("bar")
 		case "PUBLISH":
 			// push channel args....
 			if len(cmd.Args) < 2 {
@@ -152,7 +158,7 @@ func (client *client) serve() {
 			// this just sends X num of items in the channel
 			// then subscribes to channel X starting from 0
 			// or where the client has left off
-			fmt.Println("-> args ->", cmd.Args)
+			//fmt.Println("-> args ->", cmd.Args)
 			client.GetOffset()
 			startNum := client.offset
 			iter := client.db.NewIterator(&util.Range{
@@ -163,7 +169,7 @@ func (client *client) serve() {
 			for iter.Next() {
 				key := iter.Key()
 				value := iter.Value()
-				fmt.Println("sending - ", string(key), string(value))
+				//fmt.Println("sending - ", string(key), string(value))
 				client.send("message", cmd.Args[0], string(key) + "||" + string(value))
 				cnt += 1
 				if cnt > 10 {
@@ -241,7 +247,7 @@ func (e protocolError) Error() string {
 func (client *client) readCommand() (*command, error) {
 	for {
 		line, err := client.readLine()
-
+		//fmt.Println("->", string(line))
 		if err != nil {
 			return nil, err
 		}
@@ -252,8 +258,9 @@ func (client *client) readCommand() (*command, error) {
 		}
 
 		argc, err := strconv.ParseUint(line[1:], 10, 64)
-		if err != nil || argc <= 1 {
-			return nil, protocolError("invalid argument count: " + string(line[1:]))
+		if err != nil || argc < 1 {
+			fmt.Println("error", err)
+			return nil, protocolError("protocol error: invalid argument count: " + string(line[1:]))
 		}
 
 		args := make([]string, 0, argc)
